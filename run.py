@@ -347,7 +347,7 @@ def estimate(tensorFirst, tensorSecond):
 import cv2
 import pykitti
 import time
-
+from KITTI import KITTI_occ,KITTI_noc
 
 def draw_optical_flow(image,flow,interval):
     for x in range(0,image.shape[0],interval):
@@ -365,6 +365,9 @@ def tensor_to_image(tensor):
 		tensor = tensor[-1, :, :, :]
 	numpy_tensor = tensor.numpy().transpose([1,2,0])
 	return numpy.around(numpy_tensor * 255).astype(numpy.uint8)
+
+kitti_dataset = KITTI_occ("/media/liustein/Liustein/Data/data_scene_flow/training")
+
 
 if __name__ == '__main__':
 
