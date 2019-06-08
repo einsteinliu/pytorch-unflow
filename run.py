@@ -299,9 +299,10 @@ class Network(torch.nn.Module):
 		tensorSecond[:, 2, :, :] = tensorSecond[:, 2, :, :] - (114.785955 / 255.0)
 
 		tensorFlow = None
-
+		#tensorFlowBw = None
 		for moduleFlownet in self.moduleFlownets:
 			tensorFlow = moduleFlownet(tensorFirst, tensorSecond, tensorFlow)
+			#tensorFlowBw = moduleFlownet(tensorSecond, tensorFirst, tensorFlowBw)
 		# end
 
 		return tensorFlow
@@ -319,8 +320,8 @@ def estimate(tensorFirst, tensorSecond):
 	intWidth = tensorFirst.size(2)
 	intHeight = tensorFirst.size(1)
 
-	assert(intWidth == 1280) # remember that there is no guarantee for correctness, comment this line out if you acknowledge this and want to continue
-	assert(intHeight == 384) # remember that there is no guarantee for correctness, comment this line out if you acknowledge this and want to continue
+	#assert(intWidth == 1280) # remember that there is no guarantee for correctness, comment this line out if you acknowledge this and want to continue
+	#assert(intHeight == 384) # remember that there is no guarantee for correctness, comment this line out if you acknowledge this and want to continue
 
 	tensorPreprocessedFirst = tensorFirst.cuda().view(1, 3, intHeight, intWidth)
 	tensorPreprocessedSecond = tensorSecond.cuda().view(1, 3, intHeight, intWidth)
@@ -333,25 +334,72 @@ def estimate(tensorFirst, tensorSecond):
 
 	tensorFlow = torch.nn.functional.interpolate(input=moduleNetwork(tensorPreprocessedFirst, tensorPreprocessedSecond), size=(intHeight, intWidth), mode='bilinear', align_corners=False)
 
+	tensorFirstWrapped = Backward(tensorPreprocessedSecond, tensorFlow)
+
 	tensorFlow[:, 0, :, :] *= float(intWidth) / float(intPreprocessedWidth)
 	tensorFlow[:, 1, :, :] *= float(intHeight) / float(intPreprocessedHeight)
 
-	return tensorFlow[0, :, :, :].cpu()
+	return tensorFlow[0, :, :, :].cpu(), tensorFirstWrapped.cpu()
 # end
 
 ##########################################################
 
+import cv2
+import pykitti
+import time
+
+
+def draw_optical_flow(image,flow,interval):
+    for x in range(0,image.shape[0],interval):
+        for y in range(0,image.shape[1],interval):
+            u,v = flow[:,x,y]
+            cv2.arrowedLine(image, (y,x), (int(round(y+u)),int(round(x+v))), (0,0,255), 1)
+
+
+def image_to_tensor(image):
+    return torch.FloatTensor(numpy.array(image.transpose(2, 0, 1).astype(numpy.float32) * (1.0 / 255.0)))
+
+
+def tensor_to_image(tensor):
+	if len(tensor.size())==4:
+		tensor = tensor[-1, :, :, :]
+	numpy_tensor = tensor.numpy().transpose([1,2,0])
+	return numpy.around(numpy_tensor * 255).astype(numpy.uint8)
+
 if __name__ == '__main__':
-	tensorFirst = torch.FloatTensor(numpy.array(PIL.Image.open(arguments_strFirst))[:, :, ::-1].transpose(2, 0, 1).astype(numpy.float32) * (1.0 / 255.0))
-	tensorSecond = torch.FloatTensor(numpy.array(PIL.Image.open(arguments_strSecond))[:, :, ::-1].transpose(2, 0, 1).astype(numpy.float32) * (1.0 / 255.0))
 
-	tensorOutput = estimate(tensorFirst, tensorSecond)
+	# Change this to the directory where you store KITTI data
+	basedir = '/media/liustein/Liustein/Data/kitti_odometry'
 
-	objectOutput = open(arguments_strOut, 'wb')
+	# Specify the dataset to load
+	sequence = '00'
 
-	numpy.array([ 80, 73, 69, 72 ], numpy.uint8).tofile(objectOutput)
-	numpy.array([ tensorOutput.size(2), tensorOutput.size(1) ], numpy.int32).tofile(objectOutput)
-	numpy.array(tensorOutput.numpy().transpose(1, 2, 0), numpy.float32).tofile(objectOutput)
+	# Load the data. Optionally, specify the frame range to load.
+	dataset = pykitti.odometry(basedir, sequence)
 
-	objectOutput.close()
+	index = 0
+	image_previous = next(dataset.rgb)[0]
+	tensor_previous = image_to_tensor(image_previous[:, :-1, :])
+	for image_set in dataset.rgb:
+		image = image_set[0][:, :-1, :]
+
+		start = time.time()
+
+		tensor_current = image_to_tensor(image)
+		tensor_flow, tensor_first_wrapped = estimate(tensor_previous, tensor_current)
+		flow = tensor_flow.data.cpu().numpy()
+
+		end = time.time()
+		print((end - start) * 1000)
+
+		first_image_wrapped = tensor_to_image(tensor_first_wrapped)
+		ori_wrap = numpy.concatenate([tensor_to_image(tensor_previous), first_image_wrapped, image], axis=0)
+
+		# Obtain the flow magnitude and direction angle
+		draw_optical_flow(image, flow, 10)
+		cv2.imshow("flow", image)
+		cv2.imshow("wrapped", ori_wrap)
+		cv2.waitKey(-1)
+		tensor_previous = tensor_current
+
 # end
